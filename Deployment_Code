@@ -1,0 +1,191 @@
+
+#include <Wire.h>
+#include <MPU6050_light.h>
+
+#include <Jakaria_inferencing.h>
+
+MPU6050 mpu(Wire);
+
+/* =========================
+   Configuration
+   ========================= */
+
+#define SDA_PIN                21
+#define SCL_PIN                22
+
+#define SAMPLE_RATE_HZ         200
+#define SAMPLE_INTERVAL_MS     5
+
+#define BUZZER_PIN             25
+#define FAULT_THRESHOLD        0.80
+
+/* =========================
+   Feature buffer
+   ========================= */
+
+float features[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE];
+
+/* =========================
+   Edge Impulse signal
+   ========================= */
+
+int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
+
+    memcpy(out_ptr, features + offset, length * sizeof(float));
+
+    return 0;
+}
+
+void setup() {
+
+    Serial.begin(115200);
+
+    delay(1000);
+
+    /* =========================
+       I2C start
+       ========================= */
+
+    Wire.begin(SDA_PIN, SCL_PIN);
+
+    /* =========================
+       MPU6050 init
+       ========================= */
+
+    byte status = mpu.begin();
+
+    Serial.print("MPU6050 status: ");
+    Serial.println(status);
+
+    while (status != 0) {
+        Serial.println("MPU6050 connection failed!");
+        delay(1000);
+    }
+
+    Serial.println("MPU6050 initialized!");
+
+    /* =========================
+       Buzzer setup
+       ========================= */
+
+    pinMode(BUZZER_PIN, OUTPUT);
+
+    noTone(BUZZER_PIN);
+
+    delay(1000);
+
+    Serial.println("Edge Impulse realtime inference started");
+}
+
+/* =========================
+   Main loop
+   ========================= */
+
+void loop() {
+
+    /* =========================
+       Collect sensor data
+       ========================= */
+
+    for (int i = 0; i < EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE; i += 3) {
+
+        mpu.update();
+
+        features[i]     = mpu.getAccX();
+        features[i + 1] = mpu.getAccY();
+        features[i + 2] = mpu.getAccZ();
+
+        delay(SAMPLE_INTERVAL_MS);
+    }
+
+    /* =========================
+       Create EI signal
+       ========================= */
+
+    signal_t signal;
+
+    signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
+
+    signal.get_data = &raw_feature_get_data;
+
+    ei_impulse_result_t result = { 0 };
+
+    /* =========================
+       Run classifier
+       ========================= */
+
+    EI_IMPULSE_ERROR res = run_classifier(&signal, &result, false);
+
+    if (res != EI_IMPULSE_OK) {
+
+        Serial.print("Inference failed: ");
+
+        Serial.println(res);
+
+        return;
+    }
+
+    /* =========================
+       Print predictions
+       ========================= */
+
+    Serial.println();
+    Serial.println("===== Prediction =====");
+
+    float fault_score = 0.0;
+
+    for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
+
+        Serial.print(ei_classifier_inferencing_categories[ix]);
+
+        Serial.print(": ");
+
+        Serial.println(result.classification[ix].value, 5);
+
+        /* Save fault score */
+
+        if (String(ei_classifier_inferencing_categories[ix]) == "fault") {
+
+            fault_score = result.classification[ix].value;
+        }
+    }
+
+    /* =========================
+       Fault detection
+       ========================= */
+
+    if (fault_score > FAULT_THRESHOLD) {
+
+        Serial.println("⚠ MOTOR FAULT DETECTED");
+
+        tone(BUZZER_PIN, 2000);
+
+        delay(200);
+
+        noTone(BUZZER_PIN);
+    }
+    else {
+
+        noTone(BUZZER_PIN);
+    }
+
+    /* =========================
+       Timing info
+       ========================= */
+
+    Serial.print("DSP Time: ");
+
+    Serial.print(result.timing.dsp);
+
+    Serial.println(" ms");
+
+    Serial.print("Inference Time: ");
+
+    Serial.print(result.timing.classification);
+
+    Serial.println(" ms");
+
+    Serial.println("======================");
+
+    delay(500);
+}
