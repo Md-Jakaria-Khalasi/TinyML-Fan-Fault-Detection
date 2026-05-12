@@ -1,0 +1,49 @@
+import serial
+import csv
+import time
+import os
+
+COM_PORT = 'COM6'  # আপনার পোর্টের নাম চেক করে নিন
+BAUD_RATE = 115200
+FILE_NAME = 'Test_1.csv'
+
+# ফাইল আগে থেকে থাকলে ডিলিট করে নতুন ফাইল করবে
+if os.path.exists(FILE_NAME):
+    os.remove(FILE_NAME)
+
+try:
+    ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=1)
+    print(f"Connected to {COM_PORT}. Collecting data...")
+
+    start_time = time.time()
+
+    with open(FILE_NAME, 'w', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["timestamp", "AcX", "AcY", "AcZ"])
+
+        count = 0
+        while True:
+            if ser.in_waiting > 0:
+                line = ser.readline().decode('utf-8', errors='ignore').strip()
+                data = line.split(',')
+
+                if len(data) == 3:
+                    try:
+                        # টাইমস্ট্যাম্প মিলি-সেকেন্ডে (০ থেকে শুরু হবে)
+                        timestamp = int((time.time() - start_time) * 1000)
+
+                        # ডাটা ফাইলে লিখছে
+                        writer.writerow([timestamp, data[0], data[1], data[2]])
+                        csv_file.flush()  # ডাটা সাথে সাথে হার্ডডিস্কে সেভ করবে
+
+                        count += 1
+                        if count % 500 == 0:
+                            print(f"Saved {count} rows in {FILE_NAME}")
+                    except ValueError:
+                        continue
+
+except KeyboardInterrupt:
+    print(f"\nStopped! Total {count} rows saved in {FILE_NAME}")
+finally:
+    if 'ser' in locals():
+        ser.close()
